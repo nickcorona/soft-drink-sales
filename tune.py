@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import lightgbm as lgb
@@ -7,13 +8,12 @@ import pandas as pd
 import seaborn as sns
 from sklearn.model_selection import train_test_split
 from statsmodels.nonparametric.smoothers_lowess import lowess
-import json
 
 from helpers import encode_dates, loguniform, similarity_encode
 
 df = pd.read_csv(
-    r"data\creditcard.csv",
-    parse_dates=[],
+    r"data\train.csv",
+    parse_dates=["date"],
     index_col=[],
     delimiter=",",
     low_memory=False,
@@ -25,7 +25,8 @@ print(
     .sort_values(["dtype", "proportion unique"])
 )
 
-TARGET = "Class"
+TARGET = "quantity"
+df = df.dropna(subset=[TARGET])
 TARGET_LEAKAGE = []
 y = df[TARGET]
 X = df.drop(
@@ -55,9 +56,13 @@ if ENCODE:
         drop_original=False,
     )
 
-CATEGORIZE = False
+CATEGORIZE = True
 if CATEGORIZE:
     X[obj_cols] = X[obj_cols].astype("category")
+
+DATE_ENCODE = True
+if DATE_ENCODE:
+    X = encode_dates(X, "date")
 
 sns.displot(y)
 plt.title("Distribution")
@@ -76,8 +81,8 @@ Xs, ys = Xt.loc[sample_idx], yt.loc[sample_idx]
 ds = lgb.Dataset(Xs, ys)
 dv = lgb.Dataset(Xv, yv, free_raw_data=False)
 
-OBJECTIVE = "binary"
-METRIC = "auc"
+OBJECTIVE = "regression"
+METRIC = "rmse"
 MAXIMIZE = False
 EARLY_STOPPING_ROUNDS = 10
 MAX_ROUNDS = 10000
@@ -88,7 +93,7 @@ params = {
     "metric": METRIC,
     "verbose": -1,
     "n_jobs": 6,
-    "num_classes": 1,
+    # "num_classes": 1,
     # "tweedie_variance_power": 1.3,
 }
 
@@ -149,22 +154,24 @@ if TUNE_ETA:
     plt.ylabel(METRIC)
     plt.show()
 
-    print(f"Good learning rate: {best_eta:4f}")
+    print(f"Good learning rate: {best_eta}")
     params["learning_rate"] = best_eta
-    model = lgb.train(
-        params,
-        dt,
-        valid_sets=[dt, dv],
-        valid_names=["training", "valid"],
-        num_boost_round=MAX_ROUNDS,
-        early_stopping_rounds=EARLY_STOPPING_ROUNDS,
-        verbose_eval=REPORT_ROUNDS,
-    )
 else:
     # best learning rate once run
-    params["learning_rate"] = 0.006343919291175603
+    # rmse: 3490.8
+    params["learning_rate"] = 0.0035969087735309765
 
-DROP_CORRELATED = True
+model = lgb.train(
+    params,
+    dt,
+    valid_sets=[dt, dv],
+    valid_names=["training", "valid"],
+    num_boost_round=MAX_ROUNDS,
+    early_stopping_rounds=EARLY_STOPPING_ROUNDS,
+    verbose_eval=REPORT_ROUNDS,
+)
+
+DROP_CORRELATED = False
 if DROP_CORRELATED:
     threshold = 0.75
     corr = Xt.corr(method="kendall")
@@ -221,30 +228,31 @@ if DROP_CORRELATED:
             f"dropped features: {correlated_features if len(correlated_features) > 0 else None}"
         )
         print(f"ending score: {best_score:.4f}")
-
-        correlation_elimination = len(correlated_features) > 0
-        if correlation_elimination:
-            X = X.drop(correlated_features, axis=1)
-            Xt, Xv, yt, yv = train_test_split(
-                X, y, random_state=SEED
-            )  # split into train and validation set
-            Xs, ys = Xt.loc[sample_idx], yt.loc[sample_idx]
-            dt = lgb.Dataset(Xt, yt, silent=True)
-            ds = lgb.Dataset(Xs, ys, silent=True)
-            dv = lgb.Dataset(Xv, yv, silent=True)
-
-            model = lgb.train(
-                params,
-                dt,
-                valid_sets=[dt, dv],
-                valid_names=["training", "valid"],
-                num_boost_round=MAX_ROUNDS,
-                early_stopping_rounds=EARLY_STOPPING_ROUNDS,
-                verbose_eval=False,
-            )
 else:
-    correlated_features = set()
+    correlated_features = {"id"}
 
+correlation_elimination = len(correlated_features) > 0
+if correlation_elimination:
+    X = X.drop(correlated_features, axis=1)
+    Xt, Xv, yt, yv = train_test_split(
+        X, y, random_state=SEED
+    )  # split into train and validation set
+    Xs, ys = Xt.loc[sample_idx], yt.loc[sample_idx]
+    dt = lgb.Dataset(Xt, yt, silent=True)
+    ds = lgb.Dataset(Xs, ys, silent=True)
+    dv = lgb.Dataset(Xv, yv, silent=True)
+
+    model = lgb.train(
+        params,
+        dt,
+        valid_sets=[dt, dv],
+        valid_names=["training", "valid"],
+        num_boost_round=MAX_ROUNDS,
+        early_stopping_rounds=EARLY_STOPPING_ROUNDS,
+        verbose_eval=False,
+    )
+
+# decide which unimportant features to drop to improve the model
 DROP_UNIMPORTANT = True
 if DROP_UNIMPORTANT:
     sorted_features = [
@@ -286,29 +294,30 @@ if DROP_UNIMPORTANT:
     print(
         f"dropped features: {unimportant_features if len(unimportant_features) > 0 else None}"
     )
-    feature_elimination = len(unimportant_features) > 0
-
-    if feature_elimination:
-        X = X.drop(unimportant_features, axis=1)
-        Xt, Xv, yt, yv = train_test_split(
-            X, y, random_state=SEED
-        )  # split into train and validation set
-        Xs, ys = Xt.loc[sample_idx], yt.loc[sample_idx]
-        dt = lgb.Dataset(Xt, yt, silent=True)
-        ds = lgb.Dataset(Xs, ys, silent=True)
-        dv = lgb.Dataset(Xv, yv, silent=True)
-
-        model = lgb.train(
-            params,
-            dt,
-            valid_sets=[dt, dv],
-            valid_names=["training", "valid"],
-            num_boost_round=MAX_ROUNDS,
-            early_stopping_rounds=EARLY_STOPPING_ROUNDS,
-            verbose_eval=REPORT_ROUNDS,
-        )
 else:
-    unimportant_features = []
+    unimportant_features = ["date_hour", "date_minute", "date_second", "lat"]
+
+feature_elimination = len(unimportant_features) > 0
+
+if feature_elimination:
+    X = X.drop(unimportant_features, axis=1)
+    Xt, Xv, yt, yv = train_test_split(
+        X, y, random_state=SEED
+    )  # split into train and validation set
+    Xs, ys = Xt.loc[sample_idx], yt.loc[sample_idx]
+    dt = lgb.Dataset(Xt, yt, silent=True)
+    ds = lgb.Dataset(Xs, ys, silent=True)
+    dv = lgb.Dataset(Xv, yv, silent=True)
+
+    model = lgb.train(
+        params,
+        dt,
+        valid_sets=[dt, dv],
+        valid_names=["training", "valid"],
+        num_boost_round=MAX_ROUNDS,
+        early_stopping_rounds=EARLY_STOPPING_ROUNDS,
+        verbose_eval=False,
+    )
 
 dropped_features = list(correlated_features) + unimportant_features
 print(dropped_features)
@@ -348,23 +357,22 @@ else:
     dt = lgb.Dataset(Xt, yt, silent=True)
     ds = lgb.Dataset(Xs, ys, silent=True)
     dv = lgb.Dataset(Xv, yv, silent=True)
-    # logloss: 0.0024259020234480622
+    # rmse 3196.296911696699
     best_params = {
-        "objective": "binary",
-        "metric": "binary_logloss",
+        "objective": "regression",
+        "metric": "rmse",
         "verbose": -1,
         "n_jobs": 6,
-        "num_classes": 1,
-        "learning_rate": 0.006343919291175603,
+        "learning_rate": 0.0035969087735309765,
         "feature_pre_filter": False,
-        "lambda_l1": 2.4372197591185075e-05,
-        "lambda_l2": 5.059319169584316,
-        "num_leaves": 6,
-        "feature_fraction": 0.6,
-        "bagging_fraction": 0.7619786549768274,
-        "bagging_freq": 2,
-        "min_child_samples": 25,
-        "num_boost_rounds": 1814,
+        "lambda_l1": 0.0,
+        "lambda_l2": 0.0,
+        "num_leaves": 108,
+        "feature_fraction": 0.8999999999999999,
+        "bagging_fraction": 1.0,
+        "bagging_freq": 0,
+        "min_child_samples": 20,
+        "num_boost_rounds": 7323,
     }
     model = lgb.train(
         best_params,
@@ -389,10 +397,22 @@ plt.savefig(figure_path / "feature_importance.png")
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
-    roc_curve,
     plot_roc_curve,
+    r2_score,
+    roc_curve,
 )
 
-fpr, tpr, thresholds = roc_curve(yt, model.predict(Xt))
-sns.lineplot(x=fpr, y=tpr)
-plt.show()
+r2_score(yv, model.predict(Xv))
+
+# test score
+TEST = True
+if TEST:
+    df_test = pd.read_csv("data/test.csv", parse_dates=["date"])
+    y_test = df_test["quantity"]
+    X_test = df_test.drop("quantity", axis=1)
+    CATEGORIZE = True
+    if CATEGORIZE:
+        X_test[obj_cols] = X_test[obj_cols].astype("category")
+    X_test = encode_dates(X_test, "date")
+    X_test = X_test.drop(dropped_features, axis=1)
+    r2_score(y_test, model.predict(X_test))

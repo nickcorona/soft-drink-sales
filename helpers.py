@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from dirty_cat import SimilarityEncoder
 from pathlib import Path
+import holidays
 
 
 def loguniform(low=0, high=1, size=None, base=10):
@@ -9,8 +10,11 @@ def loguniform(low=0, high=1, size=None, base=10):
     return np.power(base, np.random.uniform(low, high, size))
 
 
-def encode_dates(df, column):
+def encode_dates(df, column, country=None):
     df.copy()
+    if country:
+        country_holidays = holidays.CountryHoliday(country)
+        df["holiday"] = df[column].isin(country_holidays)
     df[column + "_year"] = df[column].dt.year
     df[column + "_month"] = df[column].dt.month
     df[column + "_day"] = df[column].dt.day

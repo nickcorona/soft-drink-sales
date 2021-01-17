@@ -406,6 +406,9 @@ from sklearn.metrics import (
 r2_score(yv, model.predict(Xv))
 np.sqrt(mean_squared_error(yv, model.predict(Xv)))
 
+from sklearn.metrics import mean_squared_error, r2_score
+import numpy as np
+
 # test score
 TEST = True
 if TEST:

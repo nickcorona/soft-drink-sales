@@ -400,9 +400,11 @@ from sklearn.metrics import (
     plot_roc_curve,
     r2_score,
     roc_curve,
+    mean_squared_error,
 )
 
 r2_score(yv, model.predict(Xv))
+np.sqrt(mean_squared_error(yv, model.predict(Xv)))
 
 # test score
 TEST = True
@@ -416,3 +418,4 @@ if TEST:
     X_test = encode_dates(X_test, "date")
     X_test = X_test.drop(dropped_features, axis=1)
     r2_score(y_test, model.predict(X_test))
+    np.sqrt(mean_squared_error(y_test, model.predict(X_test)))
